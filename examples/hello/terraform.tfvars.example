@@ -1,0 +1,11 @@
+# Copy to terraform.tfvars (ignored by git) and fill in. None of these values is a secret, but the email and
+# the billing account are yours: keep them out of public repositories.
+
+project_id           = "my-project-id"
+region               = "southamerica-east1"
+billing_account      = "000000-000000-000000"
+monthly_budget       = 50
+alert_email          = "you@example.com"
+github_repository    = "my-user/hello"
+github_repository_id = "123456789"
+github_owner_id      = "987654321"

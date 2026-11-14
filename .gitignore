@@ -1,0 +1,30 @@
+# Terraform working files and state. State can hold sensitive values: it never goes to git.
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+*.tfplan
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# A reusable module does not pin provider builds; the example's lock file is created on your machine.
+.terraform.lock.hcl
+
+# Your own values (the example ships terraform.tfvars.example instead).
+*.tfvars
+*.tfvars.json
+!*.tfvars.example
+
+# Python
+__pycache__/
+*.pyc
+
+# Local files
+.env
+.env.*
+.DS_Store
+.vscode/
+.idea/

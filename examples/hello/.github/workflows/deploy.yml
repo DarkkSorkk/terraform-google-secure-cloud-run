@@ -1,0 +1,97 @@
+# Deploy workflow for YOUR repository (copy it to .github/workflows/deploy.yml there, next to the app/
+# folder). It does not run in this repository: GitHub only reads workflows from the root .github folder.
+#
+# Login is keyless (Workload Identity Federation). The github-oidc module only lets this file, running on
+# main, use the deploy identity, and that identity can only push images and update this one service.
+# Set the repository variables from the example's github_actions_variables output. None is a secret.
+# Actions are pinned by commit SHA (checked on 2026-11-09); Dependabot proposes updates.
+
+name: deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Unit tests
+        working-directory: app
+        run: python3 -m unittest -v
+
+  deploy:
+    needs: test
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write # keyless login only
+    env:
+      PROJECT: ${{ vars.GCP_PROJECT }}
+      REGION: ${{ vars.GCP_REGION }}
+      SERVICE: ${{ vars.SERVICE }}
+      IMAGE: ${{ vars.IMAGE }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Build
+        run: docker build --tag "app:${GITHUB_SHA}" app
+
+      - name: The image does not run as root
+        run: test "$(docker image inspect --format '{{.Config.User}}' "app:${GITHUB_SHA}")" = "10001"
+
+      - name: Vulnerability scan (Trivy)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: app:${{ github.sha }}
+          scanners: vuln,secret
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+
+      - name: Keyless login to Google Cloud
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SA }}
+
+      - name: Push the image and read its digest
+        run: |
+          gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+          tag="${GITHUB_SHA::12}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          docker tag "app:${GITHUB_SHA}" "${IMAGE}:${tag}"
+          docker push "${IMAGE}:${tag}"
+          digest=$(docker image inspect --format '{{index .RepoDigests 0}}' "${IMAGE}:${tag}")
+          case "$digest" in
+            "${IMAGE}@sha256:"*) echo "IMAGE_DIGEST=${digest}" >> "$GITHUB_ENV" ;;
+            *) echo "::error::Unexpected digest: ${digest}"; exit 1 ;;
+          esac
+
+      - name: Deploy the new revision (only the image changes)
+        run: |
+          gcloud run services update "$SERVICE" --project="$PROJECT" --region="$REGION" --image="$IMAGE_DIGEST" --quiet
+          # After a rollback, traffic stays pinned to the old revision until this.
+          gcloud run services update-traffic "$SERVICE" --project="$PROJECT" --region="$REGION" --to-latest --quiet
+
+      - name: Check the revision is ready
+        run: |
+          service=$(gcloud run services describe "$SERVICE" --project="$PROJECT" --region="$REGION" --format=json)
+          ready=$(echo "$service" | jq -r '.status.latestReadyRevisionName')
+          created=$(echo "$service" | jq -r '.status.latestCreatedRevisionName')
+          if [ "$ready" != "$created" ]; then
+            echo "::error::The new revision did not become ready (ready: $ready, created: $created)."
+            exit 1
+          fi
+          echo "Deployed $ready with $IMAGE_DIGEST" >> "$GITHUB_STEP_SUMMARY"

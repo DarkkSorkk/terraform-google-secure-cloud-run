@@ -1,0 +1,20 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+
+  - package-ecosystem: terraform
+    directories:
+      - /
+      - /modules/github-oidc
+      - /modules/budget
+      - /examples/hello
+    schedule:
+      interval: monthly
+
+  - package-ecosystem: docker
+    directory: /examples/hello/app
+    schedule:
+      interval: monthly
